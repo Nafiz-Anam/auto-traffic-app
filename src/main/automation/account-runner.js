@@ -359,17 +359,15 @@ const AccountRunnerMethods = {
                 console.error(`[${account.username}] Login:`, err?.message),
             );
 
-            // STEP 7: Complete service selection flow
-            winLog("STEP 7: Starting service selection flow...");
+            // STEP 7+: Heading-driven booking wizard (service → summary)
+            winLog("STEP 7: Starting heading-driven booking wizard...");
             if (proxy) {
                 await this.installProxyOverlay(page, proxy).catch(() => {});
             }
-            await this.completeServiceFlow(
-                page,
-                config?.service,
-                account.username,
-                config,
-            );
+            await page
+                .waitForURL(/prenotazione/i, { timeout: 120000 })
+                .catch(() => {});
+            await this.runBookingWizard(page, account.username, config);
 
             winLog(
                 proxy

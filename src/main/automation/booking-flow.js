@@ -3,6 +3,11 @@ const {
     isRecaptchaEnterpriseQuotaBlocked,
     logRecaptchaSiteQuotaBlocked,
 } = require("./captcha.js");
+const {
+    STEP_ORDER,
+    detectWizardStep,
+    waitForWizardStep,
+} = require("./booking-wizard-steps.js");
 
 /**
  * Prototype methods attached to BrowserAutomation — mounted via Object.assign in index.js.
@@ -13,243 +18,218 @@ const {
  *   - this._forceCaptchaTokenApply  (captcha.js)
  */
 const BookingFlowMethods = {
-    async completeBookingFlow(page, accountLabel, config) {
-        // How many times a single step can fail before we trigger a full restart.
-        const MAX_STEP_RETRIES = 3;
-        // How many full restarts (navigate back to prenotazione start) we allow.
-        const MAX_FULL_RESTARTS = 5;
+    async refreshWizardPage(page) {
+        await page
+            .reload({ waitUntil: "commit", timeout: 30000 })
+            .catch(() => {});
+        await page
+            .waitForLoadState("domcontentloaded", { timeout: 10000 })
+            .catch(() => {});
+    },
 
-        const PRENOTAZIONE_URL =
-            "https://prenotafacile.poliziadistato.it/it/prenotazione";
+    async goBackOneWizardStep(page, accountLabel) {
+        const indietroClicked = await page.evaluate(() => {
+            const selectors = [
+                "button",
+                ".v-btn",
+                "[role='button']",
+                "a.v-btn",
+                ".v-btn--contained",
+                ".v-btn--elevated",
+            ];
 
-        const steps = [
-            {
-                name: "8.1: Structure Selection",
-                run: () => this.handleStructureSelection(page, accountLabel),
-            },
-            {
-                name: "8.2: Date and Time Selection",
-                run: () => this.handleDateTimeSelection(page, accountLabel),
-            },
-            {
-                name: "8.3: Additional Information",
-                run: () => this.handleAdditionalInfo(page, accountLabel),
-            },
-            {
-                name: "8.4: Final Steps (Checkbox + CAPTCHA + PRENOTA)",
-                run: () => this.handleFinalSteps(page, accountLabel, config),
-            },
-        ];
+            let indietroBtn = null;
 
-        // Try to go back using INDIETRO button first, then browser back, then navigate to start
-        const goBackOnePage = async () => {
-            // Always try to find and click INDIETRO button first
-            const indietroClicked = await page.evaluate(() => {
-                // Try multiple selectors to find INDIETRO button
-                const selectors = [
-                    "button",
-                    ".v-btn",
-                    "[role='button']",
-                    "a.v-btn",
-                    ".v-btn--contained",
-                    ".v-btn--elevated",
-                ];
-
-                let indietroBtn = null;
-
-                // Search through all possible button elements
-                for (const selector of selectors) {
-                    const buttons = [...document.querySelectorAll(selector)];
-                    indietroBtn = buttons.find((btn) => {
-                        const text = (btn.innerText || btn.textContent || "")
-                            .trim()
-                            .toUpperCase();
-                        return text === "INDIETRO" || text.includes("INDIETRO");
-                    });
-                    if (indietroBtn) break;
-                }
-
-                // Additional fallback - search by exact text match
-                if (!indietroBtn) {
-                    const allElements = [...document.querySelectorAll("*")];
-                    indietroBtn = allElements.find((el) => {
-                        const text = (
-                            el.innerText ||
-                            el.textContent ||
-                            ""
-                        ).trim();
-                        return (
-                            text.toUpperCase() === "INDIETRO" &&
-                            (el.tagName === "BUTTON" ||
-                                el.tagName === "A" ||
-                                el.getAttribute("role") === "button")
-                        );
-                    });
-                }
-
-                if (!indietroBtn) {
-                    console.log("INDIETRO button not found on page");
-                    return false;
-                }
-
-                // Check if button is visible and enabled
-                const style = window.getComputedStyle(indietroBtn);
-                if (
-                    style.display === "none" ||
-                    style.visibility === "hidden" ||
-                    style.opacity === "0" ||
-                    indietroBtn.disabled
-                ) {
-                    console.log(
-                        "INDIETRO button found but not visible or enabled",
-                    );
-                    return false;
-                }
-
-                // Scroll button into view to ensure it's clickable
-                indietroBtn.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center",
+            for (const selector of selectors) {
+                const buttons = [...document.querySelectorAll(selector)];
+                indietroBtn = buttons.find((btn) => {
+                    const text = (btn.innerText || btn.textContent || "")
+                        .trim()
+                        .toUpperCase();
+                    return text === "INDIETRO" || text.includes("INDIETRO");
                 });
+                if (indietroBtn) break;
+            }
 
-                // Wait a moment for scroll to complete
-                setTimeout(() => {
-                    // Use real mouse events like other button clicks in this codebase
-                    const r = indietroBtn.getBoundingClientRect();
-                    ["mousedown", "mouseup", "click"].forEach((t) =>
-                        indietroBtn.dispatchEvent(
-                            new MouseEvent(t, {
-                                bubbles: true,
-                                cancelable: true,
-                                clientX: r.left + r.width / 2,
-                                clientY: r.top + r.height / 2,
-                            }),
-                        ),
+            if (!indietroBtn) {
+                const allElements = [...document.querySelectorAll("*")];
+                indietroBtn = allElements.find((el) => {
+                    const text = (el.innerText || el.textContent || "").trim();
+                    return (
+                        text.toUpperCase() === "INDIETRO" &&
+                        (el.tagName === "BUTTON" ||
+                            el.tagName === "A" ||
+                            el.getAttribute("role") === "button")
                     );
-                }, 200);
+                });
+            }
 
+            if (!indietroBtn) return false;
+
+            const style = window.getComputedStyle(indietroBtn);
+            if (
+                style.display === "none" ||
+                style.visibility === "hidden" ||
+                style.opacity === "0" ||
+                indietroBtn.disabled
+            ) {
+                return false;
+            }
+
+            indietroBtn.scrollIntoView({ block: "center" });
+            const r = indietroBtn.getBoundingClientRect();
+            ["mousedown", "mouseup", "click"].forEach((t) =>
+                indietroBtn.dispatchEvent(
+                    new MouseEvent(t, {
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: r.left + r.width / 2,
+                        clientY: r.top + r.height / 2,
+                    }),
+                ),
+            );
+            return true;
+        });
+
+        if (indietroClicked) {
+            console.log(
+                `[${accountLabel}] Clicked INDIETRO to go back one wizard step`,
+            );
+            await page
+                .waitForLoadState("domcontentloaded", { timeout: 10000 })
+                .catch(() => {});
+            return true;
+        }
+
+        console.log(
+            `[${accountLabel}] INDIETRO not available — using browser back`,
+        );
+        await page.goBack({ timeout: 10000 }).catch(() => {});
+        await page
+            .waitForLoadState("domcontentloaded", { timeout: 10000 })
+            .catch(() => {});
+        return false;
+    },
+
+    async runWizardStep(page, accountLabel, config, stepId) {
+        switch (stepId) {
+            case "service":
+                return this.handleServiceSelection(page, accountLabel, config);
+            case "structure":
+                await this.handleStructureSelection(page, accountLabel);
                 return true;
-            });
+            case "date":
+                await this.handleDateTimeSelection(page, accountLabel);
+                return true;
+            case "additional":
+                await this.handleAdditionalInfo(page, accountLabel);
+                return true;
+            case "summary":
+                return this.handleFinalSteps(page, accountLabel, config);
+            default:
+                throw new Error(`Unknown wizard step: ${stepId}`);
+        }
+    },
 
-            if (indietroClicked) {
-                console.log(
-                    `[${accountLabel}] Successfully clicked INDIETRO button to go back`,
-                );
-            } else {
-                console.log(
-                    `[${accountLabel}] INDIETRO button not available, falling back to browser back`,
-                );
-                // Fall back to browser back button
-                await page.goBack({ timeout: 10000 }).catch(async () => {
-                    console.log(
-                        `[${accountLabel}] Browser back failed, navigating to booking start`,
-                    );
-                    await page
-                        .goto(PRENOTAZIONE_URL, {
-                            waitUntil: "commit",
-                            timeout: 30000,
-                        })
-                        .catch(() => {});
-                });
+    /**
+     * Drive the full booking wizard from whatever step the page heading shows.
+     * Recovery: same-step failure → INDIETRO then re-detect (no refresh if INDIETRO worked);
+     * redirect to another step → refresh then re-detect.
+     */
+    async runBookingWizard(page, accountLabel, config) {
+        const MAX_ROUNDS = 80;
+        let scheduledWaitDone = false;
+
+        for (let round = 1; round <= MAX_ROUNDS && !this.stopFlag; round++) {
+            let stepId = await detectWizardStep(page);
+            if (!stepId) {
+                stepId = await waitForWizardStep(page, 15000);
             }
-            await new Promise((r) => setTimeout(r, 1500));
-        };
-
-        for (
-            let fullAttempt = 1;
-            fullAttempt <= MAX_FULL_RESTARTS;
-            fullAttempt++
-        ) {
-            if (fullAttempt > 1) {
+            if (!stepId) {
                 console.log(
-                    `[${accountLabel}] STEP 8: Full restart ${fullAttempt}/${MAX_FULL_RESTARTS} — navigating to booking start...`,
+                    `[${accountLabel}] No wizard heading detected — refreshing (round ${round})`,
                 );
-                await page
-                    .goto(PRENOTAZIONE_URL, {
-                        waitUntil: "commit",
-                        timeout: 30000,
-                    })
-                    .catch(() => {});
-                await new Promise((r) => setTimeout(r, 1500));
+                await this.refreshWizardPage(page);
+                continue;
             }
 
-            // Per-step failure counters — reset on each full restart.
-            const stepRetries = new Array(steps.length).fill(0);
-            let currentStep = 0;
-            let booked = false;
-            let needFullRestart = false;
+            if (stepId !== "service" && !scheduledWaitDone) {
+                await this.waitUntilScheduledTime(config, accountLabel);
+                scheduledWaitDone = true;
+                if (this.stopFlag) return;
+            }
 
-            while (currentStep < steps.length) {
-                const step = steps[currentStep];
-                console.log(
-                    `[${accountLabel}] STEP ${step.name} (full attempt ${fullAttempt})...`,
+            console.log(
+                `[${accountLabel}] Wizard round ${round}: heading → "${stepId}"`,
+            );
+
+            const stepBefore = stepId;
+            let stepOk = false;
+
+            try {
+                const result = await this.runWizardStep(
+                    page,
+                    accountLabel,
+                    config,
+                    stepId,
                 );
-
-                try {
-                    const result = await step.run();
-
-                    // handleFinalSteps returns true on success, false on failure.
-                    if (currentStep === steps.length - 1) {
-                        if (result === true) {
-                            booked = true;
-                            break;
-                        }
-                        throw new Error(
-                            "Booking not confirmed after PRENOTA click",
-                        );
-                    }
-
-                    // Step succeeded — advance.
-                    currentStep++;
-                } catch (error) {
-                    stepRetries[currentStep]++;
-                    console.error(
-                        `[${accountLabel}] STEP ${step.name} failed (retry ${stepRetries[currentStep]}/${MAX_STEP_RETRIES}): ${error.message}`,
-                    );
-
-                    if (stepRetries[currentStep] >= MAX_STEP_RETRIES) {
+                if (stepId === "summary") {
+                    if (result === true) {
                         console.log(
-                            `[${accountLabel}] STEP ${step.name} exhausted ${MAX_STEP_RETRIES} retries — triggering full restart.`,
+                            `[${accountLabel}] Booking completed successfully.`,
                         );
-                        needFullRestart = true;
-                        break;
+                        return;
                     }
-
-                    if (currentStep > 0) {
-                        // Go back one step in the wizard and redo it from scratch.
-                        const prevStep = steps[currentStep - 1];
-                        console.log(
-                            `[${accountLabel}] Stepping back to redo STEP ${prevStep.name}...`,
-                        );
-                        await goBackOnePage();
-                        currentStep--;
-                    } else {
-                        // Already at step 0 — can't go further back; wait and retry in place.
-                        console.log(
-                            `[${accountLabel}] STEP ${step.name} at step 0, retrying in place...`,
-                        );
-                        await new Promise((r) => setTimeout(r, 2000));
-                    }
+                    stepOk = false;
+                } else {
+                    stepOk = result !== false;
                 }
+            } catch (error) {
+                console.error(
+                    `[${accountLabel}] Step "${stepId}" failed: ${error.message}`,
+                );
+                stepOk = false;
             }
 
-            if (booked) {
-                console.log(
-                    `[${accountLabel}] STEP 8: Booking completed on full attempt ${fullAttempt}.`,
-                );
+            const stepAfter = (await detectWizardStep(page)) || stepBefore;
+            const orderBefore = STEP_ORDER[stepBefore] ?? -1;
+            const orderAfter = STEP_ORDER[stepAfter] ?? -1;
+
+            if (stepId === "summary" && stepOk) {
                 return;
             }
 
-            if (!needFullRestart) {
-                // While loop exited without booking and without an explicit restart
-                // signal — something unexpected; treat as exhausted.
-                break;
+            if (stepOk && orderAfter > orderBefore) {
+                continue;
+            }
+
+            if (stepAfter !== stepBefore) {
+                console.log(
+                    `[${accountLabel}] Page moved to "${stepAfter}" (was "${stepBefore}") — refresh and re-detect`,
+                );
+                await this.refreshWizardPage(page);
+                continue;
+            }
+
+            console.log(
+                `[${accountLabel}] Step "${stepBefore}" failed on same page — INDIETRO, then re-detect heading`,
+            );
+            const indietroWorked = await this.goBackOneWizardStep(
+                page,
+                accountLabel,
+            );
+            if (!indietroWorked) {
+                await this.refreshWizardPage(page);
             }
         }
 
         console.log(
-            `[${accountLabel}] All ${MAX_FULL_RESTARTS} booking attempts exhausted — stopping.`,
+            `[${accountLabel}] Wizard stopped after ${MAX_ROUNDS} rounds without completing booking.`,
         );
+    },
+
+    async completeBookingFlow(page, accountLabel, config) {
+        await this.runBookingWizard(page, accountLabel, config);
     },
 
     async handleStructureSelection(page, accountLabel) {
@@ -686,9 +666,12 @@ const BookingFlowMethods = {
 
                     if (outcome === "redirected") {
                         console.log(
-                            `[${accountLabel}] Server redirected back to earlier step (attempt ${attempt}/${MAX_FINAL_RETRIES}).`,
+                            `[${accountLabel}] Server redirected to an earlier step — wizard will refresh and re-detect.`,
                         );
-                    } else if (outcome === "error") {
+                        return false;
+                    }
+
+                    if (outcome === "error") {
                         console.log(
                             `[${accountLabel}] Server error toast detected (attempt ${attempt}/${MAX_FINAL_RETRIES}).`,
                         );
