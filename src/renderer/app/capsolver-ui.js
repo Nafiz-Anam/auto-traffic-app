@@ -1,57 +1,37 @@
 /**
- * CapSolver settings panel — reads `this.capsolverSettings`, renders form state,
- * and saves/clears via the IPC bridge.
+ * CapSolver API key panel — key is stored in data/capsolver-settings.json and
+ * synced into the unpacked extension's assets/config.js on save.
  */
 export const CapsolverUiMethods = {
     refreshCapsolverForm() {
         const input = document.getElementById("storedCapsolverApiKey");
-        const extInput = document.getElementById("chromiumExtensionPath");
-        const chromeChk = document.getElementById("useChromeChannel");
         const status = document.getElementById("capsolverKeyStatus");
         if (input) {
             input.value = this.capsolverSettings?.apiKey ?? "";
         }
-        if (extInput) {
-            extInput.value = this.capsolverSettings?.chromiumExtensionPath ?? "";
-        }
-        if (chromeChk) {
-            chromeChk.checked = Boolean(
-                this.capsolverSettings?.useChromeChannel,
-            );
-        }
         if (status) {
-            const has = Boolean(
-                (this.capsolverSettings?.apiKey || "").trim(),
-            );
-            const hasExt = Boolean(
-                (this.capsolverSettings?.chromiumExtensionPath || "").trim(),
-            );
-            const useChrome = Boolean(
-                this.capsolverSettings?.useChromeChannel,
-            );
-            const parts = [];
-            if (has) parts.push("API key saved");
-            if (hasExt) parts.push("extension path saved");
-            if (useChrome) parts.push("using Google Chrome for automation");
-            status.textContent =
-                parts.length > 0
-                    ? `Saved: ${parts.join("; ")}.`
-                    : "No API key or extension path saved yet.";
+            const has = Boolean((this.capsolverSettings?.apiKey || "").trim());
+            status.textContent = has
+                ? "API key saved and synced to the CapSolver extension."
+                : "No API key saved yet.";
         }
     },
 
     async saveCapsolverSettingsFromUI() {
         const input = document.getElementById("storedCapsolverApiKey");
-        const extInput = document.getElementById("chromiumExtensionPath");
-        const chromeChk = document.getElementById("useChromeChannel");
         const apiKey = (input?.value ?? "").trim();
-        const chromiumExtensionPath = (extInput?.value ?? "").trim();
-        const useChromeChannel = Boolean(chromeChk?.checked);
+        if (!apiKey) {
+            this.showNotification("Enter a CapSolver API key", "error");
+            return;
+        }
+
         this.capsolverSettings = {
             apiKey,
-            chromiumExtensionPath,
-            useChromeChannel,
+            chromiumExtensionPath:
+                this.capsolverSettings?.chromiumExtensionPath || "",
+            useChromeChannel: Boolean(this.capsolverSettings?.useChromeChannel),
         };
+
         try {
             const result = await window.electronAPI.saveCapsolverSettings(
                 this.capsolverSettings,
@@ -60,7 +40,7 @@ export const CapsolverUiMethods = {
                 throw new Error(result.error || "Save failed");
             }
             this.refreshCapsolverForm();
-            this.showNotification("CapSolver settings saved", "success");
+            this.showNotification("CapSolver API key saved", "success");
         } catch (error) {
             console.error("Save CapSolver settings:", error);
             this.showNotification(
@@ -78,17 +58,16 @@ export const CapsolverUiMethods = {
         ) {
             return;
         }
+
         this.capsolverSettings = {
             apiKey: "",
-            chromiumExtensionPath: "",
-            useChromeChannel: false,
+            chromiumExtensionPath:
+                this.capsolverSettings?.chromiumExtensionPath || "",
+            useChromeChannel: Boolean(this.capsolverSettings?.useChromeChannel),
         };
         const input = document.getElementById("storedCapsolverApiKey");
-        const extInput = document.getElementById("chromiumExtensionPath");
-        const chromeChk = document.getElementById("useChromeChannel");
         if (input) input.value = "";
-        if (extInput) extInput.value = "";
-        if (chromeChk) chromeChk.checked = false;
+
         try {
             const result = await window.electronAPI.saveCapsolverSettings(
                 this.capsolverSettings,

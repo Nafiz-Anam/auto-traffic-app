@@ -156,12 +156,6 @@ export const AutomationUiMethods = {
         const windowCount =
             parseInt(document.getElementById("windowCount").value) || 1;
 
-        const chromiumExtensionPath = (
-            this.capsolverSettings?.chromiumExtensionPath || ""
-        ).trim();
-        const useChromeChannel = Boolean(
-            this.capsolverSettings?.useChromeChannel,
-        );
         const useProxy =
             document.getElementById("useProxy")?.checked !== false;
 
@@ -170,8 +164,6 @@ export const AutomationUiMethods = {
             servicePhrases,
             timerMode,
             windowCount,
-            chromiumExtensionPath,
-            useChromeChannel,
             useProxy,
         };
 
@@ -195,11 +187,7 @@ export const AutomationUiMethods = {
             };
         }
 
-        console.log("Automation config:", {
-            ...config,
-            chromiumExtensionPath: chromiumExtensionPath ? "[SET]" : "",
-            useChromeChannel,
-        });
+        console.log("Automation config:", config);
 
         return config;
     },

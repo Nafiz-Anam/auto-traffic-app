@@ -2,6 +2,7 @@ const { BrowserAutomation } = require("../browser-automation.js");
 const { loadAccountsData } = require("../data/accounts.js");
 const { loadProxiesData, expandProxyPool } = require("../data/proxies.js");
 const { loadCapsolverSettingsData } = require("../data/capsolver.js");
+const { syncCapsolverApiKeyToExtension } = require("../automation/capsolver-config-sync.js");
 
 function redactAutomationConfigForLog(config) {
     if (!config || typeof config !== "object") return config;
@@ -41,6 +42,24 @@ function register(ipcMain, ctx) {
                         ? config.useChromeChannel
                         : Boolean(capsolverStored.useChromeChannel),
             };
+
+            const apiKey = (capsolverStored.apiKey || "").trim();
+            if (apiKey) {
+                const sync = syncCapsolverApiKeyToExtension(
+                    apiKey,
+                    mergedConfig,
+                );
+                if (!sync.ok) {
+                    console.warn(
+                        "CapSolver API key sync before automation:",
+                        sync.error,
+                    );
+                }
+            } else {
+                console.warn(
+                    "No CapSolver API key saved — extension may not solve captchas until you add one in the CapSolver tab.",
+                );
+            }
 
             const accounts = await loadAccountsData();
             const rawProxies = await loadProxiesData();

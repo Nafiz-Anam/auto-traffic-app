@@ -68,121 +68,110 @@
         <main class="main-content">
             <!-- Dashboard Page -->
             <div class="page active" id="dashboard-page">
-                <div class="page-header">
+                <div class="page-header dashboard-header">
                     <h2>Dashboard</h2>
-                    <div class="stats">
-                        <div class="stat-card">
+                    <div class="stats stats-compact">
+                        <div class="stat-card stat-card-compact">
                             <div class="stat-value" id="accountCount">0</div>
                             <div class="stat-label">Accounts</div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card stat-card-compact">
                             <div class="stat-value" id="proxyCount">0</div>
                             <div class="stat-label">Proxies</div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card stat-card-compact">
                             <div class="stat-value" id="activeBrowsers">0</div>
                             <div class="stat-label">Active Browsers</div>
                         </div>
                     </div>
                 </div>
 
-                <div class="dashboard-content">
-                    <!-- Service Selection -->
-                    <div class="card">
-                        <h3>Service Selection</h3>
-                        <div class="form-group">
-                            <label>Select Service</label>
-                            <select id="serviceSelect" class="form-control">
+                <div class="dashboard-grid">
+                    <div class="card card-compact">
+                        <h3>Service</h3>
+                        <div class="form-group form-group-compact">
+                            <label for="serviceSelect">Select service</label>
+                            <select id="serviceSelect" class="form-control form-control-compact">
                                 <!-- Options populated dynamically from Services list -->
                             </select>
-                            <p class="form-help">Manage available services in the <strong>Services</strong> tab.</p>
                         </div>
                     </div>
 
-                    <!-- Window Configuration -->
-                    <div class="card">
-                        <h3>Window Configuration</h3>
-                        <div class="form-group">
-                            <label for="windowCount">Number of Windows</label>
+                    <div class="card card-compact">
+                        <h3>Windows</h3>
+                        <div class="form-group form-group-compact">
+                            <label for="windowCount">Count</label>
                             <div class="window-input-group">
-                                <input type="number" id="windowCount" min="1" max="20" value="1" class="form-control">
-                                <span class="window-info">Min: 1, Max: 20</span>
+                                <input type="number" id="windowCount" min="1" max="20" value="1"
+                                    class="form-control form-control-compact">
+                                <span class="window-info">1–20</span>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Timer Configuration -->
-                    <div class="card">
-                        <div class="card-header-row">
+                    <div class="card card-compact dashboard-card-schedule">
+                        <div class="card-header-row card-header-row-compact">
                             <h3>Schedule</h3>
-                            <div class="current-clock">
+                            <div class="current-clock current-clock-compact">
                                 <svg class="clock-icon" viewBox="0 0 24 24">
                                     <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/>
                                 </svg>
                                 <span id="clockDisplay">--:--:--</span>
                             </div>
                         </div>
-                        <div class="timer-options">
-                            <label class="radio-option">
+                        <div class="timer-options timer-options-inline">
+                            <label class="radio-option radio-option-inline">
                                 <input type="radio" name="timer" value="instant" checked>
                                 <span class="radio-custom"></span>
-                                Instant Start
+                                Instant
                             </label>
-                            <label class="radio-option">
+                            <label class="radio-option radio-option-inline">
                                 <input type="radio" name="timer" value="scheduled">
                                 <span class="radio-custom"></span>
-                                Scheduled Start
+                                Scheduled
                             </label>
                         </div>
 
-                        <div class="time-inputs" id="timeInputs" style="display: none;">
+                        <div class="time-inputs time-inputs-compact" id="timeInputs" style="display: none;">
                             <div class="time-input-group">
                                 <input type="number" id="hourInput" min="0" max="23" placeholder="HH"
-                                    class="time-input">
+                                    class="time-input time-input-compact">
                                 <span>:</span>
                                 <input type="number" id="minuteInput" min="0" max="59" placeholder="MM"
-                                    class="time-input">
+                                    class="time-input time-input-compact">
                                 <span>:</span>
                                 <input type="number" id="secondInput" min="0" max="59" placeholder="SS"
-                                    class="time-input">
+                                    class="time-input time-input-compact">
                             </div>
-                            <div class="time-countdown" id="timeCountdown" style="display: none;">
+                            <div class="time-countdown time-countdown-compact" id="timeCountdown" style="display: none;">
                                 <span class="countdown-label">Starts in</span>
                                 <span class="countdown-value" id="countdownDisplay">--:--:--</span>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Proxy toggle -->
-                    <div class="card">
+                    <div class="card card-compact">
                         <h3>Proxy</h3>
-                        <label class="checkbox-row">
+                        <label class="checkbox-row checkbox-row-compact">
                             <input type="checkbox" id="useProxy" checked>
-                            <span>Use configured proxies for automation. Uncheck to run the browser with a <strong>direct connection</strong> (no proxy).</span>
+                            <span>Use configured proxies (uncheck for direct connection)</span>
                         </label>
                     </div>
+                </div>
 
-                    <!-- Captcha: extension only (no in-app API) -->
-                    <div class="card">
-                        <h3>Captcha</h3>
-                        <p class="form-help">The automation browser loads the <strong>unpacked CapSolver extension</strong> (see <strong>CapSolver</strong> in the sidebar). After the privacy checkbox, the extension solves reCAPTCHA; the app then waits for <strong>PRENOTA</strong> to enable and clicks it.</p>
-                    </div>
-
-                    <!-- Control Buttons -->
-                    <div class="control-panel">
-                        <button id="startBtn" class="btn btn-primary btn-large">
-                            <svg class="btn-icon" viewBox="0 0 24 24">
-                                <path d="M8 5v14l11-7z" />
-                            </svg>
-                            Start Automation
-                        </button>
-                        <button id="stopBtn" class="btn btn-danger btn-large" disabled>
-                            <svg class="btn-icon" viewBox="0 0 24 24">
-                                <path d="M6 6h12v12H6z" />
-                            </svg>
-                            Stop All
-                        </button>
-                    </div>
+                <div class="control-panel control-panel-compact">
+                    <button id="startBtn" class="btn btn-primary btn-large btn-dashboard">
+                        <svg class="btn-icon" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z" />
+                        </svg>
+                        Start Automation
+                    </button>
+                    <button id="stopBtn" class="btn btn-danger btn-large btn-dashboard" disabled>
+                        <svg class="btn-icon" viewBox="0 0 24 24">
+                            <path d="M6 6h12v12H6z" />
+                        </svg>
+                        Stop All
+                    </button>
                 </div>
             </div>
 
@@ -277,30 +266,17 @@
                 </div>
             </div>
 
-            <!-- CapSolver Page -->
             <div class="page" id="capsolver-page">
                 <div class="page-header">
-                    <h2>CapSolver extension</h2>
+                    <h2>CapSolver API key</h2>
                 </div>
                 <div class="card capsolver-card">
-                    <p class="form-help">Your key is stored in <code>data/capsolver-settings.json</code> on this machine
-                        (gitignored). Use the same pattern as accounts and proxies.</p>
+                    <p class="form-help">CapSolver and Buster extensions load automatically from the project folder. Save your CapSolver API key here when switching accounts or rotating keys — it is stored in <code>data/capsolver-settings.json</code> and written into the extension before automation runs.</p>
                     <div class="form-group">
-                        <label for="storedCapsolverApiKey">API Key</label>
+                        <label for="storedCapsolverApiKey">API key</label>
                         <input type="password" id="storedCapsolverApiKey" class="form-control" placeholder="CAP-..."
                             autocomplete="off" spellcheck="false">
                     </div>
-                    <div class="form-group">
-                        <label for="chromiumExtensionPath">Chromium extension folder (optional)</label>
-                        <input type="text" id="chromiumExtensionPath" class="form-control"
-                            placeholder="C:\path\to\unpacked-extension (folder containing manifest.json)"
-                            autocomplete="off" spellcheck="false">
-                    </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="useChromeChannel">
-                        <span>Use installed <strong>Google Chrome</strong> instead of bundled Chromium (optional). Default is Playwright’s Chromium — better for loading unpacked extensions. Enable only if you need Chrome-specific behavior (e.g. extension popup quirks).</span>
-                    </label>
-                    <p class="form-help">Store: <a href="https://chromewebstore.google.com/detail/captcha-solver-auto-captc/pgojnojmmhpofjgdmaebadhbocahppod?hl=en" target="_blank" rel="noopener noreferrer">CapSolver (Chrome Web Store)</a>. This app loads the <strong>unpacked</strong> folder (edit <code>assets/config.js</code> for the key). If the folder sits in the project root, it is auto-detected.</p>
                     <p id="capsolverKeyStatus" class="form-help capsolver-status" aria-live="polite"></p>
                     <div class="form-actions-row">
                         <button type="button" id="saveCapsolverBtn" class="btn btn-primary">Save</button>
@@ -310,6 +286,7 @@
                             rel="noopener noreferrer">CapSolver Dashboard</a></p>
                 </div>
             </div>
+
         </main>
     </div>
 
