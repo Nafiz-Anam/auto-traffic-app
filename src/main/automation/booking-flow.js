@@ -19,12 +19,38 @@ const {
  */
 const BookingFlowMethods = {
     /**
+     * Race the next backend XHR/fetch against a short hard timeout. After a
+     * step action (AVANTI click, etc.) the Vue SPA loads the next step's data
+     * via the site's API; reacting to that response is faster than polling
+     * the DOM. Caller fires this BEFORE clicking the trigger so we don't miss
+     * the response.
+     */
+    waitForBackendResponse(page, timeoutMs = 6000) {
+        return page
+            .waitForResponse(
+                (res) => {
+                    const url = res.url();
+                    // Same-origin API calls — not static assets.
+                    if (!/prenotafacile\.poliziadistato\.it/i.test(url)) {
+                        return false;
+                    }
+                    if (/\.(?:js|css|png|jpe?g|svg|gif|ico|woff2?|ttf|eot)(?:\?|$)/i.test(url)) {
+                        return false;
+                    }
+                    return res.status() < 500;
+                },
+                { timeout: timeoutMs },
+            )
+            .catch(() => null);
+    },
+
+    /**
      * Wait for a wizard step heading to be present in the DOM. The site renders
      * step titles as `<span class="display-1">` (Vuetify), not real h-tags.
      * Checking body.innerText would match unrelated text like stepper labels;
      * scoping to the typography classes avoids that.
      */
-    async waitForStepHeading(page, headingText, timeoutMs = 30000) {
+    async waitForStepHeading(page, headingText, timeoutMs = 15000) {
         try {
             await page.waitForFunction(
                 (needle) => {
@@ -52,7 +78,7 @@ const BookingFlowMethods = {
                     return false;
                 },
                 headingText,
-                { timeout: timeoutMs, polling: 200 },
+                { timeout: timeoutMs },
             );
             return true;
         } catch {
@@ -180,7 +206,9 @@ const BookingFlowMethods = {
      */
     async runBookingWizard(page, accountLabel, config) {
         const MAX_ROUNDS = 80;
+        const MAX_NO_SLOTS_RETRIES = 10;
         let scheduledWaitDone = false;
+        let noSlotsRetries = 0;
 
         for (let round = 1; round <= MAX_ROUNDS && !this.stopFlag; round++) {
             let stepId = await detectWizardStep(page);
@@ -227,30 +255,99 @@ const BookingFlowMethods = {
                     stepOk = result !== false;
                 }
             } catch (error) {
+                // "No appointments available" on the date step — click INDIETRO
+                // to retry from the previous step. Cap retries so the loop
+                // can't run forever.
+                if (error && error.code === "NO_SLOTS") {
+                    noSlotsRetries++;
+                    console.log(
+                        `[${accountLabel}] No appointments available (retry ${noSlotsRetries}/${MAX_NO_SLOTS_RETRIES}).`,
+                    );
+                    if (noSlotsRetries > MAX_NO_SLOTS_RETRIES) {
+                        console.log(
+                            `[${accountLabel}] Reached ${MAX_NO_SLOTS_RETRIES} no-slot retries — stopping wizard.`,
+                        );
+                        return;
+                    }
+                    console.log(
+                        `[${accountLabel}] Clicking INDIETRO to retry from previous step...`,
+                    );
+                    const indietroWorked = await this.goBackOneWizardStep(
+                        page,
+                        accountLabel,
+                    );
+                    if (!indietroWorked) {
+                        await this.refreshWizardPage(page);
+                    }
+                    continue;
+                }
                 console.error(
                     `[${accountLabel}] Step "${stepId}" failed: ${error.message}`,
                 );
                 stepOk = false;
             }
 
-            // After a successful step, Vue may need a moment to re-render the
-            // next heading. Poll for up to 10s for the step to change before
-            // declaring the step "failed on same page" and clicking INDIETRO
-            // (which would undo the click we just made).
+            // After a successful step, wait for the heading to actually change
+            // before re-detecting. Uses Playwright's default `raf` polling, so
+            // this wakes within one animation frame (~16ms) of the DOM change
+            // and falls through fast if it never changes.
             let stepAfter = stepBefore;
             if (stepOk) {
-                const deadline = Date.now() + 10000;
-                while (Date.now() < deadline) {
-                    const detected = await detectWizardStep(page);
-                    if (detected && detected !== stepBefore) {
-                        stepAfter = detected;
-                        break;
-                    }
-                    await new Promise((r) => setTimeout(r, 250));
-                }
-                if (stepAfter === stepBefore) {
-                    stepAfter =
-                        (await detectWizardStep(page)) || stepBefore;
+                try {
+                    const handle = await page.waitForFunction(
+                        ({ steps, headingSelector, prev }) => {
+                            const norm = (s) =>
+                                (s || "")
+                                    .toLowerCase()
+                                    .replace(/\s+/g, " ")
+                                    .trim();
+                            const isVisible = (el) => {
+                                const s = window.getComputedStyle(el);
+                                if (
+                                    s.display === "none" ||
+                                    s.visibility === "hidden" ||
+                                    s.opacity === "0"
+                                )
+                                    return false;
+                                const r = el.getBoundingClientRect();
+                                return r.width > 0 && r.height > 0;
+                            };
+                            const headings = [
+                                ...document.querySelectorAll(headingSelector),
+                            ]
+                                .filter(isVisible)
+                                .map((el) =>
+                                    norm(el.innerText || el.textContent || ""),
+                                );
+                            for (let i = steps.length - 1; i >= 0; i--) {
+                                const n = norm(steps[i].heading);
+                                if (headings.some((h) => h.includes(n))) {
+                                    return steps[i].id === prev ? null : steps[i].id;
+                                }
+                            }
+                            return null;
+                        },
+                        {
+                            steps: [
+                                { id: "service", heading: "Seleziona il servizio" },
+                                { id: "structure", heading: "Seleziona la struttura" },
+                                { id: "date", heading: "Seleziona la data" },
+                                { id: "additional", heading: "Informazioni aggiuntive" },
+                                { id: "summary", heading: "Riepilogo richiesta" },
+                            ],
+                            headingSelector:
+                                ".display-1, .display-2, .display-3, .display-4, " +
+                                ".text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6, " +
+                                ".headline, h1, h2, h3, h4, h5, h6, " +
+                                ".v-card-title, .v-card__title, " +
+                                ".v-toolbar-title, .v-toolbar__title",
+                            prev: stepBefore,
+                        },
+                        { timeout: 15000 },
+                    );
+                    stepAfter = (await handle.jsonValue()) || stepBefore;
+                } catch {
+                    stepAfter = (await detectWizardStep(page)) || stepBefore;
                 }
             } else {
                 stepAfter = (await detectWizardStep(page)) || stepBefore;
@@ -300,18 +397,18 @@ const BookingFlowMethods = {
         console.log(`[${accountLabel}] Handling structure selection...`);
 
         // Wait for the heading. Vuetify renders titles as <span class="display-1">.
-        await this.waitForStepHeading(page, "Seleziona la struttura", 30000);
+        await this.waitForStepHeading(page, "Seleziona la struttura", 15000);
 
-        // Click on the structure banner using the same approach as the extension
-        console.log(`[${accountLabel}] Looking for structure banner...`);
-        try {
-            const clicked = await page.evaluate(() => {
-                const element = document.querySelector(".v-banner__content");
-                if (!element) return false;
-
-                const r = element.getBoundingClientRect();
+        // Try to select the structure. The site renders structures as either
+        // a .v-banner__content card (single structure) or .v-list-item rows
+        // (multiple structures). If AVANTI is already enabled the structure
+        // was auto-selected — skip the click and go straight to AVANTI.
+        console.log(`[${accountLabel}] Looking for structure to select...`);
+        const clicked = await page.evaluate(() => {
+            const fireClick = (el) => {
+                const r = el.getBoundingClientRect();
                 ["mousedown", "mouseup", "click"].forEach((t) =>
-                    element.dispatchEvent(
+                    el.dispatchEvent(
                         new MouseEvent(t, {
                             bubbles: true,
                             cancelable: true,
@@ -320,37 +417,99 @@ const BookingFlowMethods = {
                         }),
                     ),
                 );
-                return true;
-            });
+            };
 
-            if (clicked) {
-                console.log(
-                    `[${accountLabel}] Structure banner clicked successfully using extension method`,
-                );
-            } else {
-                throw new Error("Structure banner not found");
-            }
+            // Banner layout (single structure shown as a full-width card)
+            const banner = document.querySelector(".v-banner__content");
+            if (banner) { fireClick(banner); return "banner"; }
 
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-        } catch (error) {
-            console.error(
-                `[${accountLabel}] Structure selection failed:`,
-                error.message,
+            // List layout (multiple structures as list items)
+            const listItem = document.querySelector(
+                ".v-list-item, .v-banner-on-hover, [role='listitem']",
             );
-            throw error;
+            if (listItem) { fireClick(listItem); return "list-item"; }
+
+            return null;
+        });
+
+        if (clicked) {
+            console.log(`[${accountLabel}] Structure clicked (${clicked})`);
+            await new Promise((r) => setTimeout(r, 1000));
+        } else {
+            // No clickable structure found — check if AVANTI is already
+            // enabled (auto-selected). If not, throw so the wizard retries.
+            const avantiEnabled = await page.evaluate(() =>
+                [...document.querySelectorAll("button")].some(
+                    (b) => b.innerText.trim() === "AVANTI" && !b.disabled,
+                ),
+            );
+            if (!avantiEnabled) {
+                throw new Error(
+                    "Structure not found and AVANTI not enabled — cannot proceed",
+                );
+            }
+            console.log(
+                `[${accountLabel}] No structure element found but AVANTI is enabled — proceeding`,
+            );
         }
 
+        const respPromise = this.waitForBackendResponse(page, 8000);
         await this.clickAvanti(page);
+        await respPromise;
     },
 
     async handleDateTimeSelection(page, accountLabel) {
         console.log(`[${accountLabel}] Handling date and time selection...`);
 
-        // Wait for the actual page heading (Vuetify <span class="display-1">).
-        await this.waitForStepHeading(page, "Seleziona la data", 30000);
+        // Heading wait: page is already past structure step; 15s is plenty.
+        await this.waitForStepHeading(page, "Seleziona la data", 15000);
 
+        // Race: either the "no appointments" alert appears, or the date
+        // listbox is rendered. Whichever comes first ends the wait.
+        await page
+            .waitForFunction(
+                () => {
+                    const t = (
+                        document.body?.innerText || ""
+                    ).toLowerCase();
+                    if (
+                        t.includes("al momento non c'è") ||
+                        t.includes("non c'è disponibilità di appuntamenti") ||
+                        t.includes("non c'è diponibilità di appuntamenti")
+                    ) {
+                        return true;
+                    }
+                    return Boolean(document.querySelector('[role="listbox"]'));
+                },
+                undefined,
+                { timeout: 10000 },
+            )
+            .catch(() => {});
+
+        // If the "no appointments available" alert is showing, throw a
+        // recognizable error. The wizard catches it and clicks INDIETRO
+        // to retry from the previous step (up to 10 times).
+        const noSlots = await page.evaluate(() => {
+            const t = (document.body?.innerText || "").toLowerCase();
+            return (
+                t.includes("al momento non c'è") ||
+                t.includes("non c'è disponibilità di appuntamenti") ||
+                t.includes("non c'è diponibilità di appuntamenti")
+            );
+        });
+
+        if (noSlots) {
+            const err = new Error(
+                "No appointments available — will retry from previous step",
+            );
+            err.code = "NO_SLOTS";
+            throw err;
+        }
+
+        // Listbox is already present (we raced for it above). Short safety
+        // wait in case it briefly disappeared.
         const dateListbox = await page.waitForSelector('[role="listbox"]', {
-            timeout: 30000,
+            timeout: 5000,
         });
         const dates = await page
             .locator('[role="listbox"] [role="listitem"]')
@@ -402,7 +561,7 @@ const BookingFlowMethods = {
         console.log(`[${accountLabel}] Handling additional information...`);
 
         // Wait for the actual page heading (Vuetify <span class="display-1">).
-        await this.waitForStepHeading(page, "Informazioni aggiuntive", 30000);
+        await this.waitForStepHeading(page, "Informazioni aggiuntive", 15000);
 
         // Click NO option using the same approach as the extension
         console.log(`[${accountLabel}] Looking for NO option...`);
@@ -433,16 +592,19 @@ const BookingFlowMethods = {
 
         console.log(`[${accountLabel}] NO option clicked successfully`);
 
-        // Wait for AVANTI to be enabled and click it
+        // Wait for AVANTI to enable. Default raf polling is plenty fast.
         await page.waitForFunction(
             () =>
                 [...document.querySelectorAll("button")].find(
                     (b) => b.innerText.trim() === "AVANTI" && !b.disabled,
                 ),
             undefined,
-            { timeout: 30000 },
+            { timeout: 15000 },
         );
+
+        const respPromise = this.waitForBackendResponse(page, 8000);
         await this.clickAvanti(page);
+        await respPromise;
     },
 
     async handleFinalSteps(page, accountLabel, config) {
@@ -561,7 +723,7 @@ const BookingFlowMethods = {
                         return false;
                     },
                     undefined,
-                    { timeout: timeoutMs, polling: 500 },
+                    { timeout: timeoutMs },
                 );
                 return await outcome.jsonValue();
             } catch (_) {
@@ -629,7 +791,7 @@ const BookingFlowMethods = {
                             return false;
                         },
                         lastSubmittedToken,
-                        { timeout: 300000, polling: 500 },
+                        { timeout: 300000 },
                     );
                     console.log(
                         `[${accountLabel}] Fresh captcha token in DOM.`,
@@ -651,7 +813,7 @@ const BookingFlowMethods = {
                                 return false;
                             },
                             lastSubmittedToken,
-                            { timeout: 5000, polling: 250 },
+                            { timeout: 5000 },
                         )
                         .then((h) => h.jsonValue())
                         .catch(() => null);
@@ -690,7 +852,7 @@ const BookingFlowMethods = {
                         `[${accountLabel}] PRENOTA clicked; awaiting outcome (race success/redirect/error)...`,
                     );
 
-                    const outcome = await awaitOutcome(180000);
+                    const outcome = await awaitOutcome(60000);
 
                     if (outcome === "success") {
                         const bookingNum = await page
@@ -754,8 +916,6 @@ const BookingFlowMethods = {
     async clickAvanti(page) {
         try {
             console.log("Waiting for AVANTI button to be enabled...");
-
-            // Wait longer for button to become enabled
             await page
                 .waitForFunction(
                     () =>
@@ -767,17 +927,16 @@ const BookingFlowMethods = {
                     { timeout: 10000 },
                 )
                 .catch(() =>
-                    console.log("AVANTI button wait timeout, trying anyway..."),
+                    console.log(
+                        "AVANTI button wait timeout, trying anyway...",
+                    ),
                 );
 
-            // Use the same approach as the extension
             const clicked = await page.evaluate(() => {
                 const btn = [...document.querySelectorAll("button")].find(
                     (b) => b.innerText.trim() === "AVANTI" && !b.disabled,
                 );
                 if (!btn) return false;
-
-                // Use the same realClick approach as the extension
                 const r = btn.getBoundingClientRect();
                 ["mousedown", "mouseup", "click"].forEach((t) =>
                     btn.dispatchEvent(
@@ -791,25 +950,11 @@ const BookingFlowMethods = {
                 );
                 return true;
             });
-
-            if (clicked) {
+            if (clicked)
                 console.log(
                     "AVANTI button clicked successfully using extension method",
                 );
-
-                // Wait for navigation to complete
-                try {
-                    await page.waitForLoadState("domcontentloaded", {
-                        timeout: 5000,
-                    });
-                } catch (e) {
-                    console.log(
-                        "Navigation may not have occurred, continuing...",
-                    );
-                }
-            } else {
-                throw new Error("AVANTI button not found or disabled");
-            }
+            else throw new Error("AVANTI button not found or disabled");
         } catch (error) {
             console.error("AVANTI click failed:", error.message);
             throw error;

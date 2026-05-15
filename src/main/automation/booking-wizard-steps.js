@@ -106,7 +106,7 @@ async function waitForWizardStep(page, timeoutMs = 15000) {
                 return null;
             },
             { steps: WIZARD_STEPS, headingSelector: HEADING_SELECTOR },
-            { timeout: timeoutMs, polling: 100 },
+            { timeout: timeoutMs },
         );
         return await handle.jsonValue();
     } catch {

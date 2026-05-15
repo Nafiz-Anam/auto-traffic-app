@@ -45,8 +45,8 @@ const LoginFlowMethods = {
     },
 
     async gotoWithRetry(page, url, accountLabel) {
-        const attempts = 4;
-        const timeoutMs = 90000;
+        const attempts = 2;
+        const timeoutMs = 30000;
         let lastError = null;
         for (let i = 1; i <= attempts; i++) {
             try {

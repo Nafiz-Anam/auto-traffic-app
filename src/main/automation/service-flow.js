@@ -32,7 +32,7 @@ const ServiceFlowMethods = {
         );
 
         // Wait for the actual heading (Vuetify <span class="display-1">).
-        await this.waitForStepHeading(page, "Seleziona il servizio", 60000);
+        await this.waitForStepHeading(page, "Seleziona il servizio", 15000);
 
         // Wait for the service list rows to render before matching. The title
         // can appear before the rows are populated by Vue.
@@ -45,11 +45,11 @@ const ServiceFlowMethods = {
                     return rows.length > 0;
                 },
                 undefined,
-                { timeout: 30000 },
+                { timeout: 10000 },
             )
             .catch(() =>
                 console.log(
-                    `[${accountLabel}] Service rows didn't render in 30s — trying match anyway`,
+                    `[${accountLabel}] Service rows didn't render in 10s — trying match anyway`,
                 ),
             );
 
@@ -84,22 +84,19 @@ const ServiceFlowMethods = {
             throw new Error("Service row not found on pages 1–2");
         }
 
-        await page
-            .waitForLoadState("domcontentloaded", { timeout: 3000 })
-            .catch(() => {});
-
-        // Duplicato is no longer present in every flow — try it but don't
-        // fail the whole step if it isn't on the page. AVANTI's enabled state
-        // is the real gate.
+        // After the row click, Tipologia options (incl. Duplicato) render via
+        // Vue — clickDuplicato's per-locator waitFor(2s) handles that delay.
         const duplicatoClicked = await this.clickDuplicato(page);
-        console.log(
-            `[${accountLabel}] Duplicato radio: ${duplicatoClicked ? "clicked" : "not present, skipping"}`,
-        );
+        if (!duplicatoClicked) {
+            throw new Error("Duplicato radio not found or not clickable");
+        }
 
+        const respPromise = this.waitForBackendResponse(page, 8000);
         const avantiClicked = await this.clickEnabledAvanti(page);
         if (!avantiClicked) {
-            throw new Error("AVANTI still disabled after service selection");
+            throw new Error("AVANTI still disabled after service + duplicato");
         }
+        await respPromise;
 
         console.log(`[${accountLabel}] Service step completed (AVANTI clicked).`);
         return true;
@@ -339,6 +336,18 @@ const ServiceFlowMethods = {
 
     async clickDuplicato(page) {
         const playwrightTries = [
+            // The current UI wraps the whole Duplicato choice in a <button>
+            // with an inner <label class="form-control">. Click the wrapping
+            // button so Vue's click handler fires reliably.
+            async () => {
+                const btn = page
+                    .locator("button")
+                    .filter({ hasText: /^\s*duplicato\s*$/i })
+                    .first();
+                await btn.waitFor({ state: "visible", timeout: 3000 });
+                await btn.click({ force: true, timeout: 2000 });
+                return true;
+            },
             async () => {
                 await page
                     .getByRole("radio", { name: /^duplicato$/i })
@@ -436,37 +445,56 @@ const ServiceFlowMethods = {
     },
 
     async clickEnabledAvanti(page) {
-        const deadline = Date.now() + 30000;
-        while (Date.now() < deadline) {
-            const clicked = await page.evaluate(() => {
-                const norm = (s) =>
-                    (s || "").toLowerCase().replace(/\s+/g, " ").trim();
-                const nodes = Array.from(
-                    document.querySelectorAll(
-                        "button, a, .v-btn, .btn, input[type='button'], input[type='submit']",
-                    ),
-                );
-                const avanti = nodes.find((el) =>
-                    norm(el.textContent || el.value || "").includes("avanti"),
-                );
-                if (!avanti) return false;
-                const disabled =
-                    avanti.disabled ||
-                    avanti.classList.contains("v-btn--disabled") ||
-                    avanti.getAttribute("aria-disabled") === "true";
-                if (disabled) return false;
-                avanti.dispatchEvent(
-                    new MouseEvent("click", {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window,
-                    }),
-                );
-                return true;
-            });
-            if (clicked) return true;
+        // 1. Wait (raf polling, default) for an AVANTI button to be present
+        //    AND not in any disabled state. Wakes within one frame of change.
+        try {
+            await page.waitForFunction(
+                () => {
+                    const norm = (s) =>
+                        (s || "")
+                            .toLowerCase()
+                            .replace(/\s+/g, " ")
+                            .trim();
+                    const nodes = Array.from(
+                        document.querySelectorAll(
+                            "button, a, .v-btn, .btn, input[type='button'], input[type='submit']",
+                        ),
+                    );
+                    const avanti = nodes.find((el) =>
+                        norm(el.textContent || el.value || "").includes(
+                            "avanti",
+                        ),
+                    );
+                    if (!avanti) return false;
+                    const disabled =
+                        avanti.disabled ||
+                        avanti.classList.contains("v-btn--disabled") ||
+                        avanti.getAttribute("aria-disabled") === "true";
+                    return !disabled;
+                },
+                undefined,
+                { timeout: 15000 },
+            );
+        } catch {
+            return false;
         }
-        return false;
+
+        // 2. Click via Playwright's real-mouse pipeline so isTrusted=true.
+        //    Vuetify v-btn rejects synthetic dispatched events, which would
+        //    silently no-op even though we logged "clicked".
+        try {
+            const btn = page
+                .locator(
+                    "button, a, .v-btn, .btn, input[type='button'], input[type='submit']",
+                )
+                .filter({ hasText: /avanti/i })
+                .first();
+            await btn.scrollIntoViewIfNeeded().catch(() => {});
+            await btn.click({ timeout: 5000 });
+            return true;
+        } catch {
+            return false;
+        }
     },
 };
 

@@ -409,7 +409,7 @@ const AccountRunnerMethods = {
                 await this.installProxyOverlay(page, currentProxy).catch(() => {});
             }
             await page
-                .waitForURL(/prenotazione/i, { timeout: 120000 })
+                .waitForURL(/prenotazione/i, { timeout: 30000 })
                 .catch(() => {});
             await this.runBookingWizard(page, account.username, config);
 
