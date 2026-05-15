@@ -8,7 +8,12 @@
  *   - this.completeBookingFlow      (booking-flow.js)
  */
 const ServiceFlowMethods = {
-    /** One pass: paginate, pick service, duplicato, AVANTI. Caller detects heading first. */
+    /**
+     * Heading-driven entry point. The booking wizard calls this when it detects
+     * the "Seleziona il servizio" heading. Single pass: wait for the list,
+     * click the service, click duplicato, click AVANTI. Throws on failure so
+     * the wizard retries via INDIETRO/refresh.
+     */
     async handleServiceSelection(page, accountLabel, config) {
         const configPhrases = Array.isArray(config?.servicePhrases)
             ? config.servicePhrases.filter(
@@ -26,8 +31,30 @@ const ServiceFlowMethods = {
             `[${accountLabel}] Service selection (phrase: "${configPhrases[0]}")...`,
         );
 
-        // Page 1 is the default — try matching on the current page first, then
-        // only paginate to page 2 if the service wasn't found.
+        // Wait for the actual heading (Vuetify <span class="display-1">).
+        await this.waitForStepHeading(page, "Seleziona il servizio", 60000);
+
+        // Wait for the service list rows to render before matching. The title
+        // can appear before the rows are populated by Vue.
+        await page
+            .waitForFunction(
+                () => {
+                    const rows = document.querySelectorAll(
+                        ".caselleservizi .row, [class*='caselle'] .row, .v-banner-on-hover, .v-list-item, [role='listitem'], .v-stepper__content .row, main .row",
+                    );
+                    return rows.length > 0;
+                },
+                undefined,
+                { timeout: 30000 },
+            )
+            .catch(() =>
+                console.log(
+                    `[${accountLabel}] Service rows didn't render in 30s — trying match anyway`,
+                ),
+            );
+
+        // Page 1 is the default — no pagination click needed. Try matching here;
+        // only paginate to page 2 if the service isn't on the current page.
         let serviceClicked = await this.clickServiceByPhrases(
             page,
             configPhrases,
@@ -39,11 +66,17 @@ const ServiceFlowMethods = {
         if (!serviceClicked) {
             const pagOk = await this.clickPaginationNumber(page, 2);
             console.log(
-                `[${accountLabel}] Pagination 2: ${pagOk ? "ok" : "skip"}`,
+                `[${accountLabel}] Pagination 2: ${pagOk ? "ok" : "skip/fail"}`,
             );
+            await page
+                .waitForLoadState("domcontentloaded", { timeout: 3000 })
+                .catch(() => {});
             serviceClicked = await this.clickServiceByPhrases(
                 page,
                 configPhrases,
+            );
+            console.log(
+                `[${accountLabel}] Service row on page 2: ${serviceClicked ? "ok" : "not found"}`,
             );
         }
 
@@ -55,14 +88,17 @@ const ServiceFlowMethods = {
             .waitForLoadState("domcontentloaded", { timeout: 3000 })
             .catch(() => {});
 
+        // Duplicato is no longer present in every flow — try it but don't
+        // fail the whole step if it isn't on the page. AVANTI's enabled state
+        // is the real gate.
         const duplicatoClicked = await this.clickDuplicato(page);
-        if (!duplicatoClicked) {
-            throw new Error("Duplicato radio not found or not clickable");
-        }
+        console.log(
+            `[${accountLabel}] Duplicato radio: ${duplicatoClicked ? "clicked" : "not present, skipping"}`,
+        );
 
         const avantiClicked = await this.clickEnabledAvanti(page);
         if (!avantiClicked) {
-            throw new Error("AVANTI still disabled after service + duplicato");
+            throw new Error("AVANTI still disabled after service selection");
         }
 
         console.log(`[${accountLabel}] Service step completed (AVANTI clicked).`);
@@ -70,10 +106,122 @@ const ServiceFlowMethods = {
     },
 
     async completeServiceFlow(page, selectedService, accountLabel, config) {
+        console.log(
+            `[${accountLabel}] STEP 7.1: Starting service selection flow (service=${selectedService || "?"})`,
+        );
+
+        // Wait for prenotazione page to load
         await page
             .waitForURL(/prenotazione/i, { timeout: 120000 })
             .catch(() => {});
-        await this.runBookingWizard(page, accountLabel, config);
+
+        // Wait for service selection title
+        await page
+            .getByText(/seleziona il servizio/i)
+            .first()
+            .waitFor({ state: "visible", timeout: 60000 })
+            .catch(() => {
+                console.log(
+                    `[${accountLabel}] Service selection title not found, continuing anyway`,
+                );
+            });
+
+        // Phrases must come from user's Services config — no hardcoded fallback.
+        const configPhrases = Array.isArray(config?.servicePhrases)
+            ? config.servicePhrases.filter(
+                  (p) => typeof p === "string" && p.trim().length > 0,
+              )
+            : [];
+
+        if (configPhrases.length === 0) {
+            console.log(
+                `[${accountLabel}] ERROR: No service phrases configured. Cannot select service.`,
+            );
+            return;
+        }
+
+        console.log(
+            `[${accountLabel}] Service phrase (exact match): "${configPhrases[0]}"`,
+        );
+
+        // Page 1 first, then page 2 if not found.
+        const paginationOrder = [1, 2];
+        const deadline = Date.now() + 120000;
+
+        while (Date.now() < deadline) {
+            const url = page.url();
+            if (!url.toLowerCase().includes("prenotazione")) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                continue;
+            }
+
+            let serviceClicked = false;
+
+            for (const pNum of paginationOrder) {
+                console.log(
+                    `[${accountLabel}] STEP 7.2.${pNum}: Trying page ${pNum}...`,
+                );
+                const pagOk = await this.clickPaginationNumber(page, pNum);
+                console.log(
+                    `[${accountLabel}] Pagination -> ${pNum}: ${pagOk ? "ok" : "skip/fail"}`,
+                );
+
+                serviceClicked = await this.clickServiceByPhrases(
+                    page,
+                    configPhrases,
+                );
+                console.log(
+                    `[${accountLabel}] Service row click on page ${pNum}: ${serviceClicked ? "ok" : "not found"}`,
+                );
+                if (serviceClicked) break;
+            }
+
+            if (!serviceClicked) {
+                continue;
+            }
+
+            try {
+                await page
+                    .waitForLoadState("domcontentloaded", { timeout: 3000 })
+                    .catch(() => {});
+            } catch {
+                // Continue even if wait fails
+            }
+
+            console.log(
+                `[${accountLabel}] STEP 7.4: Clicking duplicato radio button...`,
+            );
+            const duplicatoClicked = await this.clickDuplicato(page);
+            console.log(
+                `[${accountLabel}] Duplicato: ${duplicatoClicked ? "ok" : "fail"}`,
+            );
+            if (!duplicatoClicked) {
+                continue;
+            }
+
+            console.log(
+                `[${accountLabel}] STEP 7.5: Clicking AVANTI button to proceed...`,
+            );
+            const avantiClicked = await this.clickEnabledAvanti(page);
+            console.log(
+                `[${accountLabel}] Avanti: ${avantiClicked ? "ok" : "still disabled / fail"}`,
+            );
+            if (avantiClicked) {
+                console.log(
+                    `[${accountLabel}] Service selection completed - Starting booking flow...`,
+                );
+
+                await this.waitUntilScheduledTime(config, accountLabel);
+                if (this.stopFlag) return;
+
+                await this.completeBookingFlow(page, accountLabel, config);
+                return;
+            }
+        }
+
+        console.log(
+            `[${accountLabel}] Service flow not completed within timeout`,
+        );
     },
 
     async clickPaginationNumber(page, number) {

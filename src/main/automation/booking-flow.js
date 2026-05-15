@@ -18,6 +18,48 @@ const {
  *   - this._forceCaptchaTokenApply  (captcha.js)
  */
 const BookingFlowMethods = {
+    /**
+     * Wait for a wizard step heading to be present in the DOM. The site renders
+     * step titles as `<span class="display-1">` (Vuetify), not real h-tags.
+     * Checking body.innerText would match unrelated text like stepper labels;
+     * scoping to the typography classes avoids that.
+     */
+    async waitForStepHeading(page, headingText, timeoutMs = 30000) {
+        try {
+            await page.waitForFunction(
+                (needle) => {
+                    const norm = (s) =>
+                        (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+                    const target = norm(needle);
+                    const headings = document.querySelectorAll(
+                        ".display-1, .display-2, .display-3, .display-4, " +
+                            ".text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6, " +
+                            ".headline, h1, h2, h3, h4, h5, h6, " +
+                            ".v-card-title, .v-card__title, " +
+                            ".v-toolbar-title, .v-toolbar__title",
+                    );
+                    for (const el of headings) {
+                        const s = window.getComputedStyle(el);
+                        if (
+                            s.display === "none" ||
+                            s.visibility === "hidden" ||
+                            s.opacity === "0"
+                        )
+                            continue;
+                        const t = norm(el.innerText || el.textContent || "");
+                        if (t.includes(target)) return true;
+                    }
+                    return false;
+                },
+                headingText,
+                { timeout: timeoutMs, polling: 200 },
+            );
+            return true;
+        } catch {
+            return false;
+        }
+    },
+
     async refreshWizardPage(page) {
         await page
             .reload({ waitUntil: "commit", timeout: 30000 })
@@ -191,7 +233,29 @@ const BookingFlowMethods = {
                 stepOk = false;
             }
 
-            const stepAfter = (await detectWizardStep(page)) || stepBefore;
+            // After a successful step, Vue may need a moment to re-render the
+            // next heading. Poll for up to 10s for the step to change before
+            // declaring the step "failed on same page" and clicking INDIETRO
+            // (which would undo the click we just made).
+            let stepAfter = stepBefore;
+            if (stepOk) {
+                const deadline = Date.now() + 10000;
+                while (Date.now() < deadline) {
+                    const detected = await detectWizardStep(page);
+                    if (detected && detected !== stepBefore) {
+                        stepAfter = detected;
+                        break;
+                    }
+                    await new Promise((r) => setTimeout(r, 250));
+                }
+                if (stepAfter === stepBefore) {
+                    stepAfter =
+                        (await detectWizardStep(page)) || stepBefore;
+                }
+            } else {
+                stepAfter = (await detectWizardStep(page)) || stepBefore;
+            }
+
             const orderBefore = STEP_ORDER[stepBefore] ?? -1;
             const orderAfter = STEP_ORDER[stepAfter] ?? -1;
 
@@ -235,20 +299,12 @@ const BookingFlowMethods = {
     async handleStructureSelection(page, accountLabel) {
         console.log(`[${accountLabel}] Handling structure selection...`);
 
-        // Wait for structure page
-        await page
-            .waitForFunction(
-                () =>
-                    document.body.innerText.includes("Seleziona la struttura"),
-                undefined,
-                { timeout: 30000 },
-            )
-            .catch(() => {});
+        // Wait for the heading. Vuetify renders titles as <span class="display-1">.
+        await this.waitForStepHeading(page, "Seleziona la struttura", 30000);
 
         // Click on the structure banner using the same approach as the extension
         console.log(`[${accountLabel}] Looking for structure banner...`);
         try {
-            // Use page.evaluate to get the element and dispatch mouse events like the extension
             const clicked = await page.evaluate(() => {
                 const element = document.querySelector(".v-banner__content");
                 if (!element) return false;
@@ -275,7 +331,6 @@ const BookingFlowMethods = {
                 throw new Error("Structure banner not found");
             }
 
-            // Wait a moment for selection to register
             await new Promise((resolve) => setTimeout(resolve, 1000));
         } catch (error) {
             console.error(
@@ -285,19 +340,14 @@ const BookingFlowMethods = {
             throw error;
         }
 
-        // Click AVANTI
         await this.clickAvanti(page);
     },
 
     async handleDateTimeSelection(page, accountLabel) {
         console.log(`[${accountLabel}] Handling date and time selection...`);
 
-        // Wait for date page
-        await page.waitForFunction(
-            () => document.body.innerText.includes("Seleziona la data"),
-            undefined,
-            { timeout: 30000 },
-        );
+        // Wait for the actual page heading (Vuetify <span class="display-1">).
+        await this.waitForStepHeading(page, "Seleziona la data", 30000);
 
         const dateListbox = await page.waitForSelector('[role="listbox"]', {
             timeout: 30000,
@@ -351,15 +401,8 @@ const BookingFlowMethods = {
     async handleAdditionalInfo(page, accountLabel) {
         console.log(`[${accountLabel}] Handling additional information...`);
 
-        // Wait for additional info page
-        await page
-            .waitForFunction(
-                () =>
-                    document.body.innerText.includes("Informazioni aggiuntive"),
-                undefined,
-                { timeout: 30000 },
-            )
-            .catch(() => {});
+        // Wait for the actual page heading (Vuetify <span class="display-1">).
+        await this.waitForStepHeading(page, "Informazioni aggiuntive", 30000);
 
         // Click NO option using the same approach as the extension
         console.log(`[${accountLabel}] Looking for NO option...`);
